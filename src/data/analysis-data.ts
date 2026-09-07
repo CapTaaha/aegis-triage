@@ -143,7 +143,7 @@ function searchProducts(req, res, next) {
         filePath: "server/routes/redirect.ts",
         startLine: 15,
         endLine: 22,
-        sourceCode: \`
+        sourceCode: `
   router.get('/', (req, res, next) => {
     const targetUrl = req.query.to
     if (utils.isUrlToRedirect(targetUrl)) {
@@ -151,7 +151,7 @@ function searchProducts(req, res, next) {
     } else {
       res.status(400).send('Invalid redirect URL.')
     }
-  })\`,
+  })`,
         vulnerability: {
           pass1_hypothesis: {
             vulnerable: true,
@@ -173,7 +173,7 @@ function searchProducts(req, res, next) {
         filePath: "server/routes/profile.ts",
         startLine: 50,
         endLine: 65,
-        sourceCode: \`
+        sourceCode: `
   router.post('/api/profile/image', (req, res, next) => {
     const userId = req.user.id;
     const imageUrl = req.body.imageUrl;
@@ -186,7 +186,7 @@ function searchProducts(req, res, next) {
       .catch(err => {
         res.status(500).send(err.message);
       })
-  })\`,
+  })`,
         vulnerability: {
           pass1_hypothesis: {
             vulnerable: true,
