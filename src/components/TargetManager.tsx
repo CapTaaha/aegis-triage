@@ -8,6 +8,7 @@ import { Checkbox } from './ui/checkbox';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
+import { Textarea } from './ui/textarea';
 import type { CallGraph } from '../data/analysis-data';
 
 type TargetType = 'repository' | 'local' | 'website';
@@ -63,7 +64,7 @@ const TargetManager = ({ onAnalysisComplete }: TargetManagerProps) => {
   const [targetType, setTargetType] = useState<TargetType>('repository');
   const [source, setSource] = useState('https://github.com/juice-shop/juice-shop.git');
   const [siteUrl, setSiteUrl] = useState('https://juice-shop.herokuapp.com');
-  const [apiKey, setApiKey] = useState('');
+  const [allowlist, setAllowlist] = useState('https://github.com/juice-shop/juice-shop\njuice-shop.herokuapp.com');
   const [maxPages, setMaxPages] = useState(60);
   const [maxDepth, setMaxDepth] = useState(3);
   const [authorized, setAuthorized] = useState(false);
@@ -75,12 +76,15 @@ const TargetManager = ({ onAnalysisComplete }: TargetManagerProps) => {
     setAuthorized(false);
     if (value === 'local') {
       setSource('');
+      setAllowlist('');
     } else if (value === 'website') {
       setSource('');
       setSiteUrl('');
+      setAllowlist('');
     } else {
       setSource('https://github.com/juice-shop/juice-shop.git');
       setSiteUrl('https://juice-shop.herokuapp.com');
+      setAllowlist('https://github.com/juice-shop/juice-shop\njuice-shop.herokuapp.com');
     }
   };
 
@@ -90,11 +94,12 @@ const TargetManager = ({ onAnalysisComplete }: TargetManagerProps) => {
     try {
       const response = await fetch('/api/analyze', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           targetType,
           source: targetType === 'website' ? undefined : source.trim(),
           siteUrl: siteUrl.trim() || undefined,
+          allowlist: allowlist.split('\n').map((item) => item.trim()).filter(Boolean),
           maxPages,
           maxDepth,
           authorized,
@@ -142,9 +147,8 @@ const TargetManager = ({ onAnalysisComplete }: TargetManagerProps) => {
             <div className="relative"><Globe2 className="absolute left-3 top-3 h-4 w-4 text-slate-500" /><Input id="siteUrl" value={siteUrl} onChange={(event) => setSiteUrl(event.target.value)} className="rounded-xl border-slate-700 bg-slate-950 pl-9" placeholder="https://app.example.com" /></div>
           </div>
           <div className="space-y-2">
-            <Label htmlFor="apiKey">Administrator analysis key</Label>
-            <Input id="apiKey" type="password" autoComplete="off" value={apiKey} onChange={(event) => setApiKey(event.target.value)} className="rounded-xl border-slate-700 bg-slate-950 font-mono" placeholder="Required for every analysis request" />
-            <p className="text-xs text-slate-500">Targets are approved by server configuration. This key is sent only with this request and is not stored.</p>
+            <Label htmlFor="allowlist">Explicit allowlist <span className="text-slate-500">(one repository prefix, hostname, or local root per line)</span></Label>
+            <Textarea id="allowlist" value={allowlist} onChange={(event) => setAllowlist(event.target.value)} className="min-h-24 rounded-xl border-slate-700 bg-slate-950 font-mono text-xs" placeholder="github.com&#10;C:\\authorized-projects" />
           </div>
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-2"><Label htmlFor="maxPages">Maximum pages</Label><Input id="maxPages" type="number" min={1} max={200} value={maxPages} onChange={(event) => setMaxPages(Math.min(200, Math.max(1, Number(event.target.value) || 1)))} className="rounded-xl border-slate-700 bg-slate-950" /></div>
@@ -155,7 +159,7 @@ const TargetManager = ({ onAnalysisComplete }: TargetManagerProps) => {
             <Label htmlFor="authorization" className="cursor-pointer text-sm font-normal leading-5 text-slate-300">I confirm that I own this target or have explicit permission to assess it, and that this run is limited to static discovery, passive metadata, and human-led triage.</Label>
           </div>
           {error && <Alert className="border-rose-400/30 bg-rose-400/10 text-rose-100"><AlertCircle className="h-4 w-4" /><AlertTitle>Analysis could not start</AlertTitle><AlertDescription>{error}</AlertDescription></Alert>}
-          <Button onClick={runAnalysis} disabled={running || !apiKey || !authorized || (targetType !== 'website' && !source.trim()) || (targetType === 'website' && !siteUrl.trim())} className="h-12 w-full rounded-xl bg-emerald-500 font-semibold text-slate-950 hover:bg-emerald-400 disabled:bg-slate-700 disabled:text-slate-400">
+          <Button onClick={runAnalysis} disabled={running || !authorized || (targetType !== 'website' && !source.trim()) || (targetType === 'website' && !siteUrl.trim()) || !allowlist.trim()} className="h-12 w-full rounded-xl bg-emerald-500 font-semibold text-slate-950 hover:bg-emerald-400 disabled:bg-slate-700 disabled:text-slate-400">
             <Play className="mr-2 h-4 w-4" /> {running ? (targetType === 'website' ? 'Crawling authorized pages…' : 'Cloning and analyzing…') : 'Run authorized analysis'}
           </Button>
         </CardContent>
@@ -165,7 +169,7 @@ const TargetManager = ({ onAnalysisComplete }: TargetManagerProps) => {
         <Card className="rounded-3xl border-slate-700 bg-slate-900/70 text-slate-100">
           <CardHeader><CardTitle className="flex items-center gap-2 text-lg text-cyan-200"><ShieldCheck className="h-5 w-5" /> Safety boundary</CardTitle></CardHeader>
           <CardContent className="space-y-3 text-sm text-slate-400">
-            {['Requires an administrator key and server-approved targets', 'Builds a function call graph without returning complete source files', 'Pins each website request to a validated public IP address', 'Never generates exploits, sends payloads, or confirms exploitability automatically'].map((item) => <div key={item} className="flex gap-2"><CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" /><span>{item}</span></div>)}
+            {['Uses tree-sitter when available, with a conservative built-in parser fallback', 'Builds a function call graph and applies low-cost risk heuristics', 'Collects only response headers and TLS presence from the optional site URL', 'Never generates exploits, sends payloads, or confirms exploitability automatically'].map((item) => <div key={item} className="flex gap-2"><CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" /><span>{item}</span></div>)}
           </CardContent>
         </Card>
         <Alert className="rounded-3xl border-amber-400/20 bg-amber-400/5 text-amber-100"><AlertCircle className="h-4 w-4" /><AlertTitle>Local worker prerequisite</AlertTitle><AlertDescription className="text-amber-100/70">The machine running AegisTriage needs Python and Git. The optional packages in <code className="rounded bg-slate-950 px-1.5 py-0.5">pipeline/requirements.txt</code> enable full tree-sitter AST extraction; analysis still runs without them.</AlertDescription></Alert>
