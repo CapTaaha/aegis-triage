@@ -1,74 +1,45 @@
-import React from 'react';
-import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
+import type { CallGraph } from '../data/analysis-data';
+import { Download, FileJson, Workflow } from 'lucide-react';
 import { Button } from './ui/button';
-import { analysisData } from '../data/analysis-data';
+import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 
-const ArchitectureGuide: React.FC = () => {
+interface ArchitectureGuideProps {
+  graph: CallGraph;
+}
 
-  const exportJSON = () => {
-    const jsonString = `data:text/json;charset=utf-8,${encodeURIComponent(
-      JSON.stringify(analysisData, null, 2)
-    )}`;
-    const link = document.createElement("a");
-    link.href = jsonString;
-    link.download = "aegis-triage-report.json";
-    link.click();
-  };
+const download = (filename: string, type: string, content: string) => {
+  const url = URL.createObjectURL(new Blob([content], { type }));
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(url);
+};
 
+const ArchitectureGuide = ({ graph }: ArchitectureGuideProps) => {
   const exportMarkdown = () => {
-    let markdown = `# AegisTriage Vulnerability Report\\n\\n`;
-    analysisData.nodes.forEach(node => {
-        if(node.vulnerability) {
-            markdown += `## ${node.name}\\n\\n`;
-            markdown += `**File:** ${node.filePath}:${node.startLine}-${node.endLine}\\n\\n`;
-            markdown += `**CWE:** ${node.vulnerability.pass1_hypothesis.cwe_guess}\\n`;
-            markdown += `**Confidence:** ${node.vulnerability.pass1_hypothesis.confidence}\\n`;
-            markdown += `**Triage Verdict:** ${node.vulnerability.pass2_triage.verdict}\\n`;
-            markdown += `**Verification Status:** ${node.vulnerability.pass2_triage.status}\\n\\n`;
-            markdown += `### LLM Pass 1: Hypothesis\\n${node.vulnerability.pass1_hypothesis.reasoning}\\n\\n`;
-            markdown += `### LLM Pass 2: Triage\\n${node.vulnerability.pass2_triage.explanation}\\n\\n`;
-            markdown += `**Recommendation:**\\n\`\`\`\\n${node.vulnerability.pass2_triage.recommendation}\\n\`\`\`\\n\\n`;
-            markdown += `---`;
-        }
+    const sections = graph.nodes.filter((node) => node.vulnerability).map((node) => {
+      const finding = node.vulnerability!;
+      return [
+        `## ${node.name}`,
+        `**File:** ${node.filePath}:${node.startLine}-${node.endLine}`,
+        `**CWE:** ${finding.pass1_hypothesis.cwe_guess ?? 'Unclassified'}`,
+        `**Confidence:** ${finding.pass1_hypothesis.confidence}`,
+        `**Triage verdict:** ${finding.pass2_triage.verdict}`,
+        `**Verification status:** ${finding.pass2_triage.status}`,
+        '### Pass 1 hypothesis', finding.pass1_hypothesis.reasoning,
+        '### Pass 2 triage', finding.pass2_triage.explanation,
+        '### Recommendation', finding.pass2_triage.recommendation,
+      ].join('\n\n');
     });
-
-    const markdownString = `data:text/markdown;charset=utf-8,${encodeURIComponent(markdown)}`;
-    const link = document.createElement("a");
-    link.href = markdownString;
-    link.download = "aegis-triage-report.md";
-    link.click();
+    download('aegis-triage-report.md', 'text/markdown', ['# AegisTriage Vulnerability Report', ...sections].join('\n\n---\n\n'));
   };
 
   return (
-    <Card className="bg-gray-800 border-gray-700 text-gray-200">
-      <CardHeader>
-        <CardTitle className="text-cyan-400">Architecture & Exports</CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-6">
-        <div>
-            <h3 className="text-xl font-semibold text-emerald-400 mb-2">Pipeline Architecture</h3>
-            <p className="text-gray-400">
-                This application demonstrates a multi-stage vulnerability discovery and triage pipeline. 
-                The architecture is designed to be modular and extensible.
-            </p>
-            <ol className="list-decimal list-inside mt-2 text-gray-400 space-y-1">
-                <li><span className="font-semibold">Static Analysis:</span> The pipeline begins by parsing the target application's source code into an Abstract Syntax Tree (AST) and constructing a call graph.</li>
-                <li><span className="font-semibold">Heuristic Pre-filtering:</span> To save costs and reduce noise, a set of heuristics is used to identify potentially risky functions.</li>
-                <li><span className="font-semibold">LLM Pass 1 (Hypothesis Generation):</span> Candidate functions are sent to an LLM to generate initial vulnerability hypotheses.</li>
-                <li><span className="font-semibold">LLM Pass 2 (Triage & Classification):</span> The hypotheses from Pass 1 are reviewed by a second LLM pass with a stricter prompt to reduce false positives.</li>
-                <li><span className="font-semibold">Manual Verification:</span> The final, triaged findings are presented in the dashboard for a human analyst to verify.</li>
-            </ol>
-        </div>
-        <div>
-            <h3 className="text-xl font-semibold text-emerald-400 mb-2">Export Findings</h3>
-            <p className="text-gray-400 mb-4">Export the complete analysis data and vulnerability report in various formats.</p>
-            <div className="flex space-x-4">
-                <Button onClick={exportJSON} className="bg-emerald-500 hover:bg-emerald-600">Export as JSON</Button>
-                <Button onClick={exportMarkdown} className="bg-emerald-500 hover:bg-emerald-600">Export as Markdown</Button>
-            </div>
-        </div>
-      </CardContent>
-    </Card>
+    <div className="grid gap-5 lg:grid-cols-[1fr_.72fr]">
+      <Card className="rounded-3xl border-slate-700 bg-slate-900/80 text-slate-100"><CardHeader><CardTitle className="flex items-center gap-2 text-cyan-300"><Workflow className="h-5 w-5" /> Analysis architecture</CardTitle></CardHeader><CardContent><ol className="grid gap-3 text-sm text-slate-400 sm:grid-cols-2">{['Authorized source target and allowlist validation', 'tree-sitter JavaScript/TypeScript parsing', 'Call-graph construction with networkx', 'Heuristic candidate pre-filtering', 'Provider-agnostic two-pass LLM review', 'Human verification and report export'].map((step, index) => <li key={step} className="rounded-2xl border border-slate-800 bg-slate-950/60 p-4"><span className="mb-2 block font-mono text-xs text-emerald-400">0{index + 1}</span>{step}</li>)}</ol></CardContent></Card>
+      <Card className="rounded-3xl border-slate-700 bg-slate-900/80 text-slate-100"><CardHeader><CardTitle className="flex items-center gap-2 text-emerald-300"><Download className="h-5 w-5" /> Export current run</CardTitle></CardHeader><CardContent className="space-y-3"><p className="text-sm text-slate-400">Exports always use the currently loaded target, including its source snippets, graph edges, triage explanations, and verification states.</p><Button onClick={() => download('aegis-triage-report.json', 'application/json', JSON.stringify(graph, null, 2))} className="w-full rounded-xl bg-emerald-500 text-slate-950 hover:bg-emerald-400"><FileJson className="mr-2 h-4 w-4" /> Export JSON</Button><Button onClick={exportMarkdown} variant="outline" className="w-full rounded-xl border-cyan-400/30 text-cyan-200 hover:bg-cyan-400/10">Export Markdown</Button></CardContent></Card>
+    </div>
   );
 };
 
