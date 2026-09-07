@@ -1,57 +1,19 @@
-import React from 'react';
-import { FunctionNode } from '../data/analysis-data';
-import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
+import type { FunctionNode } from '../data/analysis-data';
 import { Badge } from './ui/badge';
+import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 
-interface FunctionDetailsPanelProps {
-  node: FunctionNode | null;
-}
+interface FunctionDetailsPanelProps { node: FunctionNode | null }
 
-const FunctionDetailsPanel: React.FC<FunctionDetailsPanelProps> = ({ node }) => {
-  if (!node) {
-    return (
-      <Card className="h-full bg-gray-800 border-gray-700">
-        <CardHeader>
-          <CardTitle className="text-emerald-400">No Function Selected</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <p className="text-gray-400">Click on a node in the graph to see its details.</p>
-        </CardContent>
-      </Card>
-    );
-  }
+const FunctionDetailsPanel = ({ node }: FunctionDetailsPanelProps) => {
+  if (!node) return <Card className="h-full rounded-2xl border-slate-800 bg-slate-900/70 text-slate-100"><CardHeader><CardTitle className="text-emerald-300">Select a function</CardTitle></CardHeader><CardContent><p className="text-sm text-slate-500">Choose a graph node to inspect its source, routes, findings, and static-flow evidence.</p></CardContent></Card>;
 
-  const { name, filePath, startLine, endLine, sourceCode, vulnerability } = node;
-
+  const findings = node.vulnerabilities ?? (node.vulnerability ? [node.vulnerability] : []);
   return (
-    <Card className="h-full bg-gray-800 border-gray-700 text-gray-200">
-      <CardHeader>
-        <CardTitle className="text-emerald-400">{name}</CardTitle>
-        <p className="text-sm text-gray-500">{filePath}:{startLine}-{endLine}</p>
-      </CardHeader>
-      <CardContent>
-        <div className="mb-4">
-            <h3 className="text-lg font-semibold text-cyan-400 mb-2">Source Code</h3>
-            <pre className="bg-gray-900 p-4 rounded-md overflow-auto text-sm"><code>{sourceCode}</code></pre>
-        </div>
-        {vulnerability && (
-            <div>
-                <h3 className="text-lg font-semibold text-cyan-400 mb-2">Vulnerability Analysis</h3>
-                <div className="space-y-4">
-                    <div>
-                        <h4 className="font-bold text-amber-400">LLM Pass 1: Hypothesis</h4>
-                        <p><Badge variant={vulnerability.pass1_hypothesis.confidence === 'critical' ? 'destructive' : 'default'}>{vulnerability.pass1_hypothesis.confidence}</Badge> {vulnerability.pass1_hypothesis.cwe_guess}</p>
-                        <p className="text-sm mt-1">{vulnerability.pass1_hypothesis.reasoning}</p>
-                    </div>
-                    <div>
-                        <h4 className="font-bold text-teal-400">LLM Pass 2: Triage</h4>
-                        <p><Badge variant={vulnerability.pass2_triage.verdict === 'likely_vulnerable' ? 'destructive' : 'secondary'}>{vulnerability.pass2_triage.verdict}</Badge></p>
-                        <p className="text-sm mt-1">{vulnerability.pass2_triage.explanation}</p>
-                        <p className="text-sm mt-2 font-mono bg-gray-900 p-2 rounded">Recommendation: {vulnerability.pass2_triage.recommendation}</p>
-                    </div>
-                </div>
-            </div>
-        )}
+    <Card className="min-h-full rounded-2xl border-slate-800 bg-slate-900/70 text-slate-100">
+      <CardHeader><CardTitle className="text-emerald-300">{node.name}</CardTitle><p className="text-xs text-slate-500">{node.filePath}:{node.startLine}-{node.endLine}</p>{node.routes?.length ? <div className="flex flex-wrap gap-2">{node.routes.map((route) => <Badge key={route} variant="outline" className="border-cyan-400/30 text-cyan-300">{route}</Badge>)}</div> : null}</CardHeader>
+      <CardContent className="space-y-5">
+        <div><h3 className="mb-2 text-sm font-semibold uppercase tracking-wider text-cyan-300">Source</h3><pre className="max-h-[440px] overflow-auto rounded-xl border border-slate-800 bg-slate-950 p-4 text-xs leading-5 text-slate-300"><code>{node.sourceCode}</code></pre></div>
+        <div><h3 className="mb-2 text-sm font-semibold uppercase tracking-wider text-cyan-300">Findings ({findings.length})</h3><div className="space-y-3">{findings.map((finding, index) => <div key={`${finding.evidence?.ruleId ?? index}`} className="rounded-xl border border-slate-800 bg-slate-950/70 p-4"><div className="flex flex-wrap items-center gap-2"><Badge variant={finding.pass1_hypothesis.confidence === 'critical' ? 'destructive' : 'secondary'}>{finding.pass1_hypothesis.confidence}</Badge><span className="font-semibold text-slate-100">{finding.evidence?.category ?? finding.pass1_hypothesis.cwe_guess}</span><span className="font-mono text-xs text-cyan-300">{finding.pass1_hypothesis.cwe_guess}</span></div>{finding.evidence?.owasp && <p className="mt-2 text-xs text-slate-500">{finding.evidence.owasp} · {finding.evidence.ruleId} · line {finding.evidence.line}</p>}<p className="mt-3 text-sm text-slate-300">{finding.pass1_hypothesis.reasoning}</p>{finding.evidence?.source && <p className="mt-2 text-xs"><span className="text-slate-500">Source: </span><span className="text-amber-200">{finding.evidence.source}</span></p>}{finding.evidence?.sink && <pre className="mt-2 overflow-auto rounded-lg bg-slate-900 p-2 text-xs text-rose-200"><code>{finding.evidence.sink}</code></pre>}<p className="mt-3 text-sm text-emerald-200">{finding.pass2_triage.explanation}</p><p className="mt-2 text-xs text-slate-400">{finding.pass2_triage.recommendation}</p></div>)}{findings.length === 0 && <p className="rounded-xl border border-emerald-400/20 bg-emerald-400/5 p-4 text-sm text-emerald-200">No OWASP-oriented source or sink finding was associated with this function.</p>}</div></div>
       </CardContent>
     </Card>
   );

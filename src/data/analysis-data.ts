@@ -16,9 +16,22 @@ export interface LLMPass2Triage {
   status: VerificationStatus;
 }
 
+export interface FindingEvidence {
+  ruleId?: string;
+  owasp?: string;
+  category?: string;
+  source?: string;
+  sink?: string;
+  sanitizers?: string[];
+  taintedIdentifiers?: string[];
+  line?: number;
+  excerpt?: string;
+}
+
 export interface VulnerabilityFinding {
   pass1_hypothesis: LLMPass1Hypothesis;
   pass2_triage: LLMPass2Triage;
+  evidence?: FindingEvidence;
 }
 
 export interface FunctionNode {
@@ -28,7 +41,9 @@ export interface FunctionNode {
   sourceCode: string;
   startLine: number;
   endLine: number;
+  routes?: string[];
   vulnerability?: VulnerabilityFinding;
+  vulnerabilities?: VulnerabilityFinding[];
 }
 
 export interface CallEdge {

@@ -11,7 +11,18 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Textarea } from './ui/textarea';
 import type { CallGraph } from '../data/analysis-data';
 
-type TargetType = 'repository' | 'local';
+type TargetType = 'repository' | 'local' | 'website';
+
+export type PassiveFinding = {
+  id: string;
+  category: string;
+  cwe: string;
+  owasp: string;
+  severity: 'low' | 'medium' | 'high';
+  url: string;
+  evidence: string;
+  recommendation: string;
+};
 
 export type SiteMetadata = {
   url: string;
@@ -19,11 +30,29 @@ export type SiteMetadata = {
   headers: Record<string, string>;
   tls: 'enabled' | 'not_enabled';
   redirectLocation: string | null;
+  crawl: {
+    pages: Array<{ url: string; status: number; title: string; contentType: string; forms: Array<{ action: string; method: string; inputs: Array<{ name: string; type: string }> }>; scripts: string[]; linksDiscovered: number }>;
+    forms: Array<{ action: string; method: string; inputs: Array<{ name: string; type: string }> }>;
+    scripts: string[];
+    findings: PassiveFinding[];
+    summary: { pagesVisited: number; formsFound: number; scriptsFound: number; findings: number; skippedByRobots: number; failedPages: number; maxPages: number; maxDepth: number };
+  };
+};
+
+export type SourceCorrelation = {
+  functionId: string;
+  functionName: string;
+  filePath: string;
+  route: string;
+  pages: string[];
+  forms: Array<{ action: string; method: string; inputs: Array<{ name: string; type: string }> }>;
+  findingCount: number;
 };
 
 export type AnalysisResponse = {
-  analysis: CallGraph & { summary?: { functions: number; findings: number; filesRoot: string; parserMode?: string; warning?: string | null } };
+  analysis: CallGraph & { summary?: { files?: number; functions: number; findings: number; filesRoot: string; parserMode?: string; rulesEvaluated?: number; coverage?: string[]; warning?: string | null } };
   site: SiteMetadata | null;
+  correlations: SourceCorrelation[];
   target: { type: TargetType; source: string; analyzedAt: string };
 };
 
@@ -36,6 +65,8 @@ const TargetManager = ({ onAnalysisComplete }: TargetManagerProps) => {
   const [source, setSource] = useState('https://github.com/juice-shop/juice-shop.git');
   const [siteUrl, setSiteUrl] = useState('https://juice-shop.herokuapp.com');
   const [allowlist, setAllowlist] = useState('https://github.com/juice-shop/juice-shop\njuice-shop.herokuapp.com');
+  const [maxPages, setMaxPages] = useState(60);
+  const [maxDepth, setMaxDepth] = useState(3);
   const [authorized, setAuthorized] = useState(false);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState('');
@@ -46,8 +77,13 @@ const TargetManager = ({ onAnalysisComplete }: TargetManagerProps) => {
     if (value === 'local') {
       setSource('');
       setAllowlist('');
+    } else if (value === 'website') {
+      setSource('');
+      setSiteUrl('');
+      setAllowlist('');
     } else {
       setSource('https://github.com/juice-shop/juice-shop.git');
+      setSiteUrl('https://juice-shop.herokuapp.com');
       setAllowlist('https://github.com/juice-shop/juice-shop\njuice-shop.herokuapp.com');
     }
   };
@@ -61,9 +97,11 @@ const TargetManager = ({ onAnalysisComplete }: TargetManagerProps) => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           targetType,
-          source: source.trim(),
+          source: targetType === 'website' ? undefined : source.trim(),
           siteUrl: siteUrl.trim() || undefined,
           allowlist: allowlist.split('\n').map((item) => item.trim()).filter(Boolean),
+          maxPages,
+          maxDepth,
           authorized,
         }),
       });
@@ -93,14 +131,14 @@ const TargetManager = ({ onAnalysisComplete }: TargetManagerProps) => {
               <Label>Source type</Label>
               <Select value={targetType} onValueChange={(value: TargetType) => changeType(value)}>
                 <SelectTrigger className="rounded-xl border-slate-700 bg-slate-950"><SelectValue /></SelectTrigger>
-                <SelectContent><SelectItem value="repository">Public Git repository</SelectItem><SelectItem value="local">Local source folder</SelectItem></SelectContent>
+                <SelectContent><SelectItem value="repository">Public Git repository + optional site</SelectItem><SelectItem value="local">Local source folder + optional site</SelectItem><SelectItem value="website">Website-only passive crawl</SelectItem></SelectContent>
               </Select>
             </div>
             <div className="space-y-2">
-              <Label htmlFor="source">{targetType === 'repository' ? 'Repository URL' : 'Absolute folder path'}</Label>
+              <Label htmlFor="source">{targetType === 'repository' ? 'Repository URL' : targetType === 'local' ? 'Absolute folder path' : 'Source analysis'}</Label>
               <div className="relative">
                 {targetType === 'repository' ? <GitBranch className="absolute left-3 top-3 h-4 w-4 text-slate-500" /> : <FolderSearch className="absolute left-3 top-3 h-4 w-4 text-slate-500" />}
-                <Input id="source" value={source} onChange={(event) => setSource(event.target.value)} className="rounded-xl border-slate-700 bg-slate-950 pl-9" placeholder={targetType === 'repository' ? 'https://github.com/org/repo.git' : 'C:\\source\\project or /home/me/project'} />
+                <Input id="source" disabled={targetType === 'website'} value={targetType === 'website' ? 'Not required for website-only mode' : source} onChange={(event) => setSource(event.target.value)} className="rounded-xl border-slate-700 bg-slate-950 pl-9 disabled:text-slate-500" placeholder={targetType === 'repository' ? 'https://github.com/org/repo.git' : 'C:\\source\\project or /home/me/project'} />
               </div>
             </div>
           </div>
@@ -112,13 +150,17 @@ const TargetManager = ({ onAnalysisComplete }: TargetManagerProps) => {
             <Label htmlFor="allowlist">Explicit allowlist <span className="text-slate-500">(one repository prefix, hostname, or local root per line)</span></Label>
             <Textarea id="allowlist" value={allowlist} onChange={(event) => setAllowlist(event.target.value)} className="min-h-24 rounded-xl border-slate-700 bg-slate-950 font-mono text-xs" placeholder="github.com&#10;C:\\authorized-projects" />
           </div>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-2"><Label htmlFor="maxPages">Maximum pages</Label><Input id="maxPages" type="number" min={1} max={200} value={maxPages} onChange={(event) => setMaxPages(Math.min(200, Math.max(1, Number(event.target.value) || 1)))} className="rounded-xl border-slate-700 bg-slate-950" /></div>
+            <div className="space-y-2"><Label htmlFor="maxDepth">Maximum crawl depth</Label><Input id="maxDepth" type="number" min={0} max={5} value={maxDepth} onChange={(event) => setMaxDepth(Math.min(5, Math.max(0, Number(event.target.value) || 0)))} className="rounded-xl border-slate-700 bg-slate-950" /></div>
+          </div>
           <div className="flex items-start gap-3 rounded-2xl border border-emerald-400/20 bg-emerald-400/5 p-4">
             <Checkbox id="authorization" checked={authorized} onCheckedChange={(checked) => setAuthorized(checked === true)} className="mt-0.5 border-emerald-400 data-[state=checked]:bg-emerald-500" />
             <Label htmlFor="authorization" className="cursor-pointer text-sm font-normal leading-5 text-slate-300">I confirm that I own this target or have explicit permission to assess it, and that this run is limited to static discovery, passive metadata, and human-led triage.</Label>
           </div>
           {error && <Alert className="border-rose-400/30 bg-rose-400/10 text-rose-100"><AlertCircle className="h-4 w-4" /><AlertTitle>Analysis could not start</AlertTitle><AlertDescription>{error}</AlertDescription></Alert>}
-          <Button onClick={runAnalysis} disabled={running || !authorized || !source.trim() || !allowlist.trim()} className="h-12 w-full rounded-xl bg-emerald-500 font-semibold text-slate-950 hover:bg-emerald-400 disabled:bg-slate-700 disabled:text-slate-400">
-            <Play className="mr-2 h-4 w-4" /> {running ? 'Cloning and analyzing…' : 'Run authorized analysis'}
+          <Button onClick={runAnalysis} disabled={running || !authorized || (targetType !== 'website' && !source.trim()) || (targetType === 'website' && !siteUrl.trim()) || !allowlist.trim()} className="h-12 w-full rounded-xl bg-emerald-500 font-semibold text-slate-950 hover:bg-emerald-400 disabled:bg-slate-700 disabled:text-slate-400">
+            <Play className="mr-2 h-4 w-4" /> {running ? (targetType === 'website' ? 'Crawling authorized pages…' : 'Cloning and analyzing…') : 'Run authorized analysis'}
           </Button>
         </CardContent>
       </Card>

@@ -1,10 +1,11 @@
 import { useState } from 'react';
-import { Activity, Braces, Network, Radar, Settings2, ShieldCheck, Workflow } from 'lucide-react';
+import { Activity, Braces, Globe2, Network, Radar, Settings2, ShieldCheck, Workflow } from 'lucide-react';
 import ArchitectureGuide from '../components/ArchitectureGuide';
 import CallGraphExplorer from '../components/CallGraphExplorer';
 import FunctionDetailsPanel from '../components/FunctionDetailsPanel';
 import LLMConfigurator from '../components/LLMConfigurator';
-import TargetManager, { AnalysisResponse, SiteMetadata } from '../components/TargetManager';
+import SiteInventory from '../components/SiteInventory';
+import TargetManager, { AnalysisResponse, SiteMetadata, SourceCorrelation } from '../components/TargetManager';
 import TriageDashboard from '../components/TriageDashboard';
 import { Alert, AlertDescription, AlertTitle } from '../components/ui/alert';
 import { Badge } from '../components/ui/badge';
@@ -16,6 +17,7 @@ export default function Index() {
   const [graph, setGraph] = useState<CallGraph>(analysisData);
   const [selectedNode, setSelectedNode] = useState<FunctionNode | null>(null);
   const [site, setSite] = useState<SiteMetadata | null>(null);
+  const [correlations, setCorrelations] = useState<SourceCorrelation[]>([]);
   const [activeTarget, setActiveTarget] = useState('Bundled Juice Shop demonstration');
   const [analysisMode, setAnalysisMode] = useState('bundled demo');
   const [analysisWarning, setAnalysisWarning] = useState<string | null>(null);
@@ -24,14 +26,15 @@ export default function Index() {
   const loadAnalysis = (result: AnalysisResponse) => {
     setGraph(result.analysis);
     setSite(result.site);
+    setCorrelations(result.correlations ?? []);
     setActiveTarget(result.target.source);
     setAnalysisMode(result.analysis.summary?.parserMode ?? 'local worker');
     setAnalysisWarning(result.analysis.summary?.warning ?? null);
     setSelectedNode(null);
-    setActiveTab('graph');
+    setActiveTab(result.target.type === 'website' ? 'website' : 'graph');
   };
 
-  const findingCount = graph.nodes.filter((node) => node.vulnerability).length;
+  const findingCount = graph.nodes.reduce((total, node) => total + (node.vulnerabilities?.length ?? (node.vulnerability ? 1 : 0)), 0);
 
   return (
     <main className="min-h-screen bg-slate-950 text-slate-100">
@@ -44,12 +47,13 @@ export default function Index() {
       </header>
 
       <Tabs value={activeTab} onValueChange={setActiveTab} className="mx-auto flex min-h-[calc(100vh-78px)] max-w-[1600px] flex-col">
-        <div className="overflow-x-auto border-b border-slate-800 px-4 sm:px-6"><TabsList className="h-14 min-w-max justify-start gap-1 rounded-none bg-transparent p-0"><TabsTrigger value="targets" className="rounded-xl data-[state=active]:bg-emerald-400/10 data-[state=active]:text-emerald-300"><Radar className="mr-2 h-4 w-4" /> Targets</TabsTrigger><TabsTrigger value="graph" className="rounded-xl data-[state=active]:bg-cyan-400/10 data-[state=active]:text-cyan-300"><Network className="mr-2 h-4 w-4" /> Call graph</TabsTrigger><TabsTrigger value="triage" className="rounded-xl data-[state=active]:bg-rose-400/10 data-[state=active]:text-rose-300"><Braces className="mr-2 h-4 w-4" /> Triage</TabsTrigger><TabsTrigger value="architecture" className="rounded-xl data-[state=active]:bg-cyan-400/10 data-[state=active]:text-cyan-300"><Workflow className="mr-2 h-4 w-4" /> Architecture & export</TabsTrigger><TabsTrigger value="settings" className="rounded-xl data-[state=active]:bg-slate-800"><Settings2 className="mr-2 h-4 w-4" /> LLM settings</TabsTrigger></TabsList></div>
+        <div className="overflow-x-auto border-b border-slate-800 px-4 sm:px-6"><TabsList className="h-14 min-w-max justify-start gap-1 rounded-none bg-transparent p-0"><TabsTrigger value="targets" className="rounded-xl data-[state=active]:bg-emerald-400/10 data-[state=active]:text-emerald-300"><Radar className="mr-2 h-4 w-4" /> Targets</TabsTrigger><TabsTrigger value="website" className="rounded-xl data-[state=active]:bg-emerald-400/10 data-[state=active]:text-emerald-300"><Globe2 className="mr-2 h-4 w-4" /> Website inventory</TabsTrigger><TabsTrigger value="graph" className="rounded-xl data-[state=active]:bg-cyan-400/10 data-[state=active]:text-cyan-300"><Network className="mr-2 h-4 w-4" /> Call graph</TabsTrigger><TabsTrigger value="triage" className="rounded-xl data-[state=active]:bg-rose-400/10 data-[state=active]:text-rose-300"><Braces className="mr-2 h-4 w-4" /> Triage</TabsTrigger><TabsTrigger value="architecture" className="rounded-xl data-[state=active]:bg-cyan-400/10 data-[state=active]:text-cyan-300"><Workflow className="mr-2 h-4 w-4" /> Architecture & export</TabsTrigger><TabsTrigger value="settings" className="rounded-xl data-[state=active]:bg-slate-800"><Settings2 className="mr-2 h-4 w-4" /> LLM settings</TabsTrigger></TabsList></div>
 
         <TabsContent value="targets" className="m-0 flex-1 p-4 sm:p-6"><TargetManager onAnalysisComplete={loadAnalysis} />{site && <Card className="mt-5 rounded-3xl border-slate-700 bg-slate-900/80 text-slate-100"><CardContent className="grid gap-4 p-5 md:grid-cols-4"><div><p className="text-xs uppercase tracking-wider text-slate-500">Passive site</p><p className="mt-1 truncate font-medium text-cyan-300">{site.url}</p></div><div><p className="text-xs uppercase tracking-wider text-slate-500">HTTP status</p><p className="mt-1 text-lg font-semibold">{site.status}</p></div><div><p className="text-xs uppercase tracking-wider text-slate-500">TLS</p><p className="mt-1 text-lg font-semibold text-emerald-300">{site.tls.replace('_', ' ')}</p></div><div><p className="text-xs uppercase tracking-wider text-slate-500">Security headers</p><p className="mt-1 text-lg font-semibold">{Object.keys(site.headers).length}</p></div></CardContent></Card>}</TabsContent>
+        <TabsContent value="website" className="m-0 flex-1 overflow-hidden"><SiteInventory site={site} correlations={correlations} /></TabsContent>
         <TabsContent value="graph" className="m-0 flex-1 overflow-hidden"><div className="grid h-[calc(100vh-135px)] min-h-[620px] lg:grid-cols-[minmax(0,1.7fr)_minmax(340px,.8fr)]"><div className="border-b border-slate-800 lg:border-b-0 lg:border-r"><CallGraphExplorer graph={graph} onNodeClick={setSelectedNode} /></div><div className="overflow-y-auto bg-slate-950 p-4"><FunctionDetailsPanel node={selectedNode} /></div></div></TabsContent>
         <TabsContent value="triage" className="m-0 flex-1 overflow-hidden"><TriageDashboard graph={graph} /></TabsContent>
-        <TabsContent value="architecture" className="m-0 flex-1 p-4 sm:p-6"><ArchitectureGuide graph={graph} /></TabsContent>
+        <TabsContent value="architecture" className="m-0 flex-1 p-4 sm:p-6"><ArchitectureGuide graph={graph} site={site} correlations={correlations} /></TabsContent>
         <TabsContent value="settings" className="m-0 flex-1 p-4 sm:p-6"><LLMConfigurator /></TabsContent>
       </Tabs>
     </main>

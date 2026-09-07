@@ -1,11 +1,11 @@
 import { spawn } from "node:child_process";
-import { isIP } from "node:net";
 import { resolve } from "node:path";
-import { lookup } from "node:dns/promises";
 import { defineHandler } from "nitro";
 import { createError, readBody } from "nitro/h3";
+import { crawlSite } from "../../utils/passive-crawler";
 
-type TargetType = "repository" | "local";
+type SourceTargetType = "repository" | "local";
+type TargetType = SourceTargetType | "website";
 
 type AnalyzeRequest = {
   targetType?: TargetType;
@@ -13,15 +13,8 @@ type AnalyzeRequest = {
   siteUrl?: string;
   allowlist?: string[];
   authorized?: boolean;
-};
-
-const isPrivateAddress = (address: string) => {
-  if (isIP(address) === 4) {
-    const [a, b] = address.split(".").map(Number);
-    return a === 10 || a === 127 || a === 0 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168);
-  }
-  const normalized = address.toLowerCase();
-  return normalized === "::1" || normalized.startsWith("fc") || normalized.startsWith("fd") || normalized.startsWith("fe80:");
+  maxPages?: number;
+  maxDepth?: number;
 };
 
 const normalizedPath = (value: string) => resolve(value).toLowerCase();
@@ -30,8 +23,11 @@ const validateTarget = async (body: AnalyzeRequest) => {
   if (!body.authorized) {
     throw createError({ statusCode: 403, statusMessage: "Confirm that you own or are authorized to assess this target." });
   }
-  if (!body.targetType || !body.source?.trim()) {
+  if (!body.targetType || (body.targetType !== "website" && !body.source?.trim())) {
     throw createError({ statusCode: 400, statusMessage: "Target type and source are required." });
+  }
+  if (body.targetType === "website" && !body.siteUrl?.trim()) {
+    throw createError({ statusCode: 400, statusMessage: "A parent website URL is required for website-only analysis." });
   }
   const allowlist = (body.allowlist ?? []).map((item) => item.trim()).filter(Boolean);
   if (allowlist.length === 0) {
@@ -59,8 +55,8 @@ const validateTarget = async (body: AnalyzeRequest) => {
     if (!allowed) {
       throw createError({ statusCode: 403, statusMessage: "Repository is not covered by the allowlist." });
     }
-  } else {
-    const sourcePath = normalizedPath(body.source);
+  } else if (body.targetType === "local") {
+    const sourcePath = normalizedPath(body.source!);
     const allowed = allowlist.some((entry) => {
       if (/^https?:\/\//i.test(entry)) return false;
       const root = normalizedPath(entry);
@@ -91,33 +87,7 @@ const validateTarget = async (body: AnalyzeRequest) => {
   }
 };
 
-const inspectSite = async (rawUrl?: string) => {
-  if (!rawUrl?.trim()) return null;
-  let url: URL;
-  try {
-    url = new URL(rawUrl);
-  } catch {
-    throw createError({ statusCode: 400, statusMessage: "Deployed site URL is invalid." });
-  }
-  if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) {
-    throw createError({ statusCode: 400, statusMessage: "Passive metadata supports only credential-free HTTP(S) URLs." });
-  }
-  const addresses = await lookup(url.hostname, { all: true });
-  if (addresses.length === 0 || addresses.some(({ address }) => isPrivateAddress(address))) {
-    throw createError({ statusCode: 400, statusMessage: "Private, local, and link-local deployed-site addresses are blocked." });
-  }
-  const response = await fetch(url, { method: "HEAD", redirect: "manual", signal: AbortSignal.timeout(8_000) });
-  const selectedHeaders = ["server", "content-type", "content-security-policy", "strict-transport-security", "x-frame-options", "x-content-type-options", "referrer-policy"];
-  return {
-    url: url.toString(),
-    status: response.status,
-    headers: Object.fromEntries(selectedHeaders.map((name) => [name, response.headers.get(name)]).filter(([, value]) => value)),
-    tls: url.protocol === "https:" ? "enabled" : "not_enabled",
-    redirectLocation: response.headers.get("location"),
-  };
-};
-
-const runWorker = (targetType: TargetType, source: string) => new Promise<Record<string, unknown>>((resolveWorker, reject) => {
+const runWorker = (targetType: SourceTargetType, source: string) => new Promise<Record<string, unknown>>((resolveWorker, reject) => {
   const python = process.platform === "win32" ? "python" : "python3";
   const script = resolve(process.cwd(), "pipeline", "analyze.py");
   const child = spawn(python, [script, "--target-type", targetType, "--source", source], {
@@ -156,15 +126,34 @@ const runWorker = (targetType: TargetType, source: string) => new Promise<Record
   });
 });
 
+const correlateEvidence = (analysis: Record<string, unknown>, site: Awaited<ReturnType<typeof crawlSite>>) => {
+  if (!site) return [];
+  const nodes = Array.isArray(analysis.nodes) ? analysis.nodes as Array<{ id: string; name: string; filePath: string; routes?: string[]; vulnerabilities?: unknown[] }> : [];
+  return nodes.flatMap((node) => (node.routes ?? []).flatMap((route) => {
+    const comparableRoute = route.replace(/:[^/]+/g, '').replace(/\*$/, '');
+    const pages = site.crawl.pages.filter((page) => {
+      try { return new URL(page.url).pathname.startsWith(comparableRoute); } catch { return false; }
+    });
+    const forms = site.crawl.forms.filter((form) => {
+      try { return new URL(form.action, site.url).pathname.startsWith(comparableRoute); } catch { return false; }
+    });
+    if (!pages.length && !forms.length) return [];
+    return [{ functionId: node.id, functionName: node.name, filePath: node.filePath, route, pages: pages.map((page) => page.url), forms: forms.map((form) => ({ action: form.action, method: form.method, inputs: form.inputs })), findingCount: node.vulnerabilities?.length ?? 0 }];
+  }));
+};
+
 export default defineHandler(async (event) => {
   const body = await readBody<AnalyzeRequest>(event);
   await validateTarget(body);
   try {
+    const sourceAnalysis = body.targetType === "website"
+      ? Promise.resolve<Record<string, unknown>>({ nodes: [], edges: [], summary: { filesRoot: "website-only", files: 0, functions: 0, findings: 0, parserMode: "not applicable", rulesEvaluated: 0, coverage: [], warning: "Website-only mode inventories public pages and passive signals. Add a repository or local source folder for source-level vulnerability discovery." } })
+      : runWorker(body.targetType as SourceTargetType, body.source!.trim());
     const [analysis, site] = await Promise.all([
-      runWorker(body.targetType!, body.source!.trim()),
-      inspectSite(body.siteUrl),
+      sourceAnalysis,
+      crawlSite(body.siteUrl, body.maxPages, body.maxDepth),
     ]);
-    return { analysis, site, target: { type: body.targetType, source: body.source, analyzedAt: new Date().toISOString() } };
+    return { analysis, site, correlations: correlateEvidence(analysis, site), target: { type: body.targetType, source: body.targetType === "website" ? body.siteUrl : body.source, analyzedAt: new Date().toISOString() } };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Analysis failed.";
     throw createError({ statusCode: 500, statusMessage: message.slice(0, 500) });
