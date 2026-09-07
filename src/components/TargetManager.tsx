@@ -21,8 +21,8 @@ export type SiteMetadata = {
   redirectLocation: string | null;
 };
 
-type AnalysisResponse = {
-  analysis: CallGraph & { summary?: { functions: number; findings: number; filesRoot: string } };
+export type AnalysisResponse = {
+  analysis: CallGraph & { summary?: { functions: number; findings: number; filesRoot: string; parserMode?: string; warning?: string | null } };
   site: SiteMetadata | null;
   target: { type: TargetType; source: string; analyzedAt: string };
 };
@@ -127,10 +127,10 @@ const TargetManager = ({ onAnalysisComplete }: TargetManagerProps) => {
         <Card className="rounded-3xl border-slate-700 bg-slate-900/70 text-slate-100">
           <CardHeader><CardTitle className="flex items-center gap-2 text-lg text-cyan-200"><ShieldCheck className="h-5 w-5" /> Safety boundary</CardTitle></CardHeader>
           <CardContent className="space-y-3 text-sm text-slate-400">
-            {['Parses JavaScript and TypeScript source with tree-sitter', 'Builds a function call graph and applies low-cost risk heuristics', 'Collects only response headers and TLS presence from the optional site URL', 'Never generates exploits, sends payloads, or confirms exploitability automatically'].map((item) => <div key={item} className="flex gap-2"><CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" /><span>{item}</span></div>)}
+            {['Uses tree-sitter when available, with a conservative built-in parser fallback', 'Builds a function call graph and applies low-cost risk heuristics', 'Collects only response headers and TLS presence from the optional site URL', 'Never generates exploits, sends payloads, or confirms exploitability automatically'].map((item) => <div key={item} className="flex gap-2"><CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" /><span>{item}</span></div>)}
           </CardContent>
         </Card>
-        <Alert className="rounded-3xl border-amber-400/20 bg-amber-400/5 text-amber-100"><AlertCircle className="h-4 w-4" /><AlertTitle>Local worker prerequisite</AlertTitle><AlertDescription className="text-amber-100/70">The machine running AegisTriage needs Python, Git, and the packages listed in <code className="rounded bg-slate-950 px-1.5 py-0.5">pipeline/requirements.txt</code>. API credentials stay in server environment variables.</AlertDescription></Alert>
+        <Alert className="rounded-3xl border-amber-400/20 bg-amber-400/5 text-amber-100"><AlertCircle className="h-4 w-4" /><AlertTitle>Local worker prerequisite</AlertTitle><AlertDescription className="text-amber-100/70">The machine running AegisTriage needs Python and Git. The optional packages in <code className="rounded bg-slate-950 px-1.5 py-0.5">pipeline/requirements.txt</code> enable full tree-sitter AST extraction; analysis still runs without them.</AlertDescription></Alert>
       </div>
     </div>
   );

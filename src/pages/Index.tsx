@@ -4,30 +4,29 @@ import ArchitectureGuide from '../components/ArchitectureGuide';
 import CallGraphExplorer from '../components/CallGraphExplorer';
 import FunctionDetailsPanel from '../components/FunctionDetailsPanel';
 import LLMConfigurator from '../components/LLMConfigurator';
-import TargetManager, { SiteMetadata } from '../components/TargetManager';
+import TargetManager, { AnalysisResponse, SiteMetadata } from '../components/TargetManager';
 import TriageDashboard from '../components/TriageDashboard';
+import { Alert, AlertDescription, AlertTitle } from '../components/ui/alert';
 import { Badge } from '../components/ui/badge';
 import { Card, CardContent } from '../components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { analysisData, CallGraph, FunctionNode } from '../data/analysis-data';
-
-type AnalysisResult = {
-  analysis: CallGraph & { summary?: { functions: number; findings: number; filesRoot: string } };
-  site: SiteMetadata | null;
-  target: { type: 'repository' | 'local'; source: string; analyzedAt: string };
-};
 
 export default function Index() {
   const [graph, setGraph] = useState<CallGraph>(analysisData);
   const [selectedNode, setSelectedNode] = useState<FunctionNode | null>(null);
   const [site, setSite] = useState<SiteMetadata | null>(null);
   const [activeTarget, setActiveTarget] = useState('Bundled Juice Shop demonstration');
+  const [analysisMode, setAnalysisMode] = useState('bundled demo');
+  const [analysisWarning, setAnalysisWarning] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState('targets');
 
-  const loadAnalysis = (result: AnalysisResult) => {
+  const loadAnalysis = (result: AnalysisResponse) => {
     setGraph(result.analysis);
     setSite(result.site);
     setActiveTarget(result.target.source);
+    setAnalysisMode(result.analysis.summary?.parserMode ?? 'local worker');
+    setAnalysisWarning(result.analysis.summary?.warning ?? null);
     setSelectedNode(null);
     setActiveTab('graph');
   };
@@ -39,8 +38,9 @@ export default function Index() {
       <header className="border-b border-slate-800 bg-slate-950/95 px-4 py-4 backdrop-blur sm:px-6">
         <div className="mx-auto flex max-w-[1600px] flex-col justify-between gap-4 lg:flex-row lg:items-center">
           <div className="flex items-center gap-3"><div className="grid h-11 w-11 place-items-center rounded-2xl border border-emerald-300/30 bg-emerald-400/10 shadow-lg shadow-emerald-950"><ShieldCheck className="h-6 w-6 text-emerald-300" /></div><div><h1 className="text-xl font-bold tracking-tight sm:text-2xl">Aegis<span className="text-emerald-400">Triage</span></h1><p className="text-xs text-slate-500">Source discovery · dual-pass triage · human verification</p></div></div>
-          <div className="flex flex-wrap items-center gap-2 text-xs"><Badge className="rounded-full border border-emerald-400/30 bg-emerald-400/10 text-emerald-200"><Activity className="mr-1.5 h-3 w-3" /> Ready</Badge><Badge variant="outline" className="max-w-[420px] truncate rounded-full border-slate-700 text-slate-400">Target: {activeTarget}</Badge><Badge variant="outline" className="rounded-full border-slate-700 text-slate-400">{graph.nodes.length} functions</Badge><Badge variant="outline" className="rounded-full border-rose-400/30 text-rose-300">{findingCount} findings</Badge></div>
+          <div className="flex flex-wrap items-center gap-2 text-xs"><Badge className="rounded-full border border-emerald-400/30 bg-emerald-400/10 text-emerald-200"><Activity className="mr-1.5 h-3 w-3" /> Ready</Badge><Badge variant="outline" className="max-w-[420px] truncate rounded-full border-slate-700 text-slate-400">Target: {activeTarget}</Badge><Badge variant="outline" className="rounded-full border-cyan-400/30 text-cyan-300">Parser: {analysisMode}</Badge><Badge variant="outline" className="rounded-full border-slate-700 text-slate-400">{graph.nodes.length} functions</Badge><Badge variant="outline" className="rounded-full border-rose-400/30 text-rose-300">{findingCount} findings</Badge></div>
         </div>
+        {analysisWarning && <Alert className="mx-auto mt-4 max-w-[1600px] border-amber-400/30 bg-amber-400/10 text-amber-100"><AlertTitle>Fallback parser active</AlertTitle><AlertDescription>{analysisWarning}</AlertDescription></Alert>}
       </header>
 
       <Tabs value={activeTab} onValueChange={setActiveTab} className="mx-auto flex min-h-[calc(100vh-78px)] max-w-[1600px] flex-col">
