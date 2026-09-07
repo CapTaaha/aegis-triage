@@ -71,14 +71,19 @@ RULES = [
 
 
 def source_files(root: Path):
+    root = root.resolve()
     for path in root.rglob("*"):
-        if not path.is_file() or path.suffix.lower() not in SOURCE_SUFFIXES:
+        if path.is_symlink() or not path.is_file() or path.suffix.lower() not in SOURCE_SUFFIXES:
             continue
-        relative = path.relative_to(root)
+        try:
+            resolved = path.resolve(strict=True)
+            relative = resolved.relative_to(root)
+        except (OSError, ValueError):
+            continue
         relative_text = str(relative).lower()
         if any(part in EXCLUDED_DIRS for part in relative.parts) or any(marker in relative_text for marker in TEST_MARKERS):
             continue
-        yield path, relative
+        yield resolved, relative
 
 
 def parser_for(suffix: str):
@@ -107,6 +112,13 @@ def function_record(relative: Path, name: str, code: str, start_line: int, end_l
     route_pattern = re.compile(r"\.(?:get|post|put|patch|delete|use)\s*\(\s*['\"]([^'\"]+)['\"]", re.I)
     routes = sorted(set(match.group(1) for match in route_pattern.finditer(code)))
     return {"id": hashlib.sha1(identity.encode()).hexdigest()[:12], "name": name, "filePath": str(relative).replace("\\", "/"), "sourceCode": code, "startLine": start_line, "endLine": end_line, "calls": sorted(set(match.group(1) for match in CALL_PATTERN.finditer(code))), "routes": routes}
+
+
+def redact_secrets(text: str) -> str:
+    redacted = re.sub(r"(?i)((?:api[_-]?key|secret|password|token|authorization)\s*[:=]\s*)['\"][^'\"]+['\"]", r'\1"[REDACTED]"', text)
+    redacted = re.sub(r"(?i)(bearer\s+)[A-Za-z0-9._~+/=-]{8,}", r"\1[REDACTED]", redacted)
+    redacted = re.sub(r"-----BEGIN [^-]+-----.*?-----END [^-]+-----", "[REDACTED PRIVATE KEY]", redacted, flags=re.S)
+    return redacted
 
 
 def walk_functions_tree_sitter(root: Path) -> tuple[list[dict], int]:
@@ -240,10 +252,11 @@ def analyze_function(function: dict) -> list[dict]:
             continue
         excerpt_start = max(0, code.rfind("\n", 0, sink_match.start()) + 1)
         excerpt_end = code.find("\n", sink_match.end())
-        excerpt = code[excerpt_start:excerpt_end if excerpt_end != -1 else len(code)].strip()[:280]
-        directly_tainted = bool(sources) or any(re.search(rf"\b{re.escape(name)}\b", excerpt) for name in tainted)
+        raw_excerpt = code[excerpt_start:excerpt_end if excerpt_end != -1 else len(code)].strip()[:280]
+        directly_tainted = bool(sources) or any(re.search(rf"\b{re.escape(name)}\b", raw_excerpt) for name in tainted)
         if rule["taint"] and not directly_tainted:
             continue
+        excerpt = redact_secrets(raw_excerpt)
         confidence = rule["confidence"]
         verdict = "likely_vulnerable" if directly_tainted and not sanitizer_names else "needs_review"
         if sanitizer_names:
@@ -267,6 +280,9 @@ def build_graph(functions: list[dict]) -> dict:
             if target and target["id"] != item["id"]:
                 edges.add((item["id"], target["id"]))
         findings = analyze_function(item)
+        excerpts = list(dict.fromkeys(finding["evidence"]["excerpt"] for finding in findings if finding.get("evidence", {}).get("excerpt")))[:3]
+        item["sourceExcerpt"] = "\n…\n".join(excerpts)
+        del item["sourceCode"]
         if findings:
             item["vulnerabilities"] = findings
             item["vulnerability"] = findings[0]
@@ -274,16 +290,28 @@ def build_graph(functions: list[dict]) -> dict:
     return {"nodes": functions, "edges": [{"source": source, "target": target} for source, target in sorted(edges)], "findingCount": finding_count}
 
 
-def materialize(target_type: str, source: str) -> tuple[Path, tempfile.TemporaryDirectory | None]:
+def materialize(target_type: str, source: str, allowed_root: str | None) -> tuple[Path, tempfile.TemporaryDirectory | None]:
     if target_type == "local":
-        path = Path(source).expanduser().resolve()
+        if not allowed_root:
+            raise ValueError("Local analysis requires a server-configured root")
+        root = Path(allowed_root).expanduser().resolve(strict=True)
+        path = Path(source).expanduser().resolve(strict=True)
+        try:
+            path.relative_to(root)
+        except ValueError as error:
+            raise ValueError("Local target is outside the server-configured root") from error
         if not path.is_dir():
             raise ValueError("Local target must be an existing directory")
         return path, None
+    if not re.fullmatch(r"https://[^/?#]+/[^/?#]+/[^/?#]+(?:\.git)?/?", source, re.I):
+        raise ValueError("Repository target must be an exact credential-free HTTPS repository URL")
     temp = tempfile.TemporaryDirectory(prefix="aegis-target-")
     destination = Path(temp.name) / "source"
     try:
-        subprocess.run(["git", "clone", "--depth", "1", "--", source, str(destination)], check=True, timeout=180, capture_output=True, text=True)
+        subprocess.run([
+            "git", "-c", "protocol.allow=never", "-c", "protocol.https.allow=always",
+            "-c", "http.followRedirects=false", "clone", "--depth", "1", "--no-tags", "--", source, str(destination)
+        ], check=True, timeout=180, capture_output=True, text=True)
     except subprocess.CalledProcessError as error:
         detail = (error.stderr or error.stdout or "Repository clone failed").strip().splitlines()[-1]
         temp.cleanup()
@@ -295,8 +323,9 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--target-type", choices=("repository", "local"), required=True)
     parser.add_argument("--source", required=True)
+    parser.add_argument("--allowed-root")
     args = parser.parse_args()
-    root, temp = materialize(args.target_type, args.source)
+    root, temp = materialize(args.target_type, args.source, args.allowed_root)
     try:
         parser_mode = "tree-sitter" if TREE_SITTER_AVAILABLE else "built-in fallback"
         functions, files = walk_functions_tree_sitter(root) if TREE_SITTER_AVAILABLE else walk_functions_fallback(root)

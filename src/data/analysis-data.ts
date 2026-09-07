@@ -38,7 +38,8 @@ export interface FunctionNode {
   id: string;
   name: string;
   filePath: string;
-  sourceCode: string;
+  sourceCode?: string;
+  sourceExcerpt?: string;
   startLine: number;
   endLine: number;
   routes?: string[];
