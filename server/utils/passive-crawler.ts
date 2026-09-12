@@ -1,6 +1,6 @@
+import { lookup } from "node:dns/promises";
+import { isIP } from "node:net";
 import { load } from "cheerio";
-import { Agent, fetch } from "undici";
-import { resolvePublicAddress } from "./network-security";
 
 export type CrawlPage = {
   url: string;
@@ -23,57 +23,19 @@ export type PassiveFinding = {
   recommendation: string;
 };
 
-type PinnedResponse = { status: number; ok: boolean; headers: Headers; text: string };
+const isPrivateAddress = (address: string) => {
+  if (isIP(address) === 4) {
+    const [a, b] = address.split(".").map(Number);
+    return a === 0 || a === 10 || a === 127 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || a >= 224;
+  }
+  const normalized = address.toLowerCase();
+  return normalized === "::" || normalized === "::1" || normalized.startsWith("fc") || normalized.startsWith("fd") || normalized.startsWith("fe80:");
+};
 
-const fetchPublicPage = async (url: URL, accept: string, timeout: number, maxBytes: number): Promise<PinnedResponse> => {
-  const resolved = await resolvePublicAddress(url.hostname);
-  const dispatcher = new Agent({
-    connect: {
-      lookup: (hostname, _options, callback) => {
-        if (hostname.toLowerCase().replace(/\.$/, "") !== url.hostname.toLowerCase().replace(/\.$/, "")) {
-          callback(new Error("Unexpected outbound hostname."), "", 4);
-          return;
-        }
-        callback(null, resolved.address, resolved.family);
-      },
-    },
-  });
-
-  try {
-    const response = await fetch(url, {
-      dispatcher,
-      redirect: "manual",
-      signal: AbortSignal.timeout(timeout),
-      headers: { "User-Agent": "AegisTriage-PassiveCrawler/1.0", Accept: accept },
-    });
-    const declaredLength = Number(response.headers.get("content-length") ?? 0);
-    if (declaredLength > maxBytes) {
-      await response.body?.cancel();
-      return { status: response.status, ok: response.ok, headers: response.headers as unknown as Headers, text: "" };
-    }
-
-    const reader = response.body?.getReader();
-    const chunks: Uint8Array[] = [];
-    let total = 0;
-    while (reader) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      total += value.byteLength;
-      if (total > maxBytes) {
-        await reader.cancel();
-        return { status: response.status, ok: response.ok, headers: response.headers as unknown as Headers, text: "" };
-      }
-      chunks.push(value);
-    }
-    const bytes = new Uint8Array(total);
-    let offset = 0;
-    for (const chunk of chunks) {
-      bytes.set(chunk, offset);
-      offset += chunk.byteLength;
-    }
-    return { status: response.status, ok: response.ok, headers: response.headers as unknown as Headers, text: new TextDecoder().decode(bytes) };
-  } finally {
-    await dispatcher.close();
+const assertPublicHost = async (hostname: string) => {
+  const addresses = await lookup(hostname, { all: true });
+  if (!addresses.length || addresses.some(({ address }) => isPrivateAddress(address))) {
+    throw new Error("Private, local, multicast, and link-local website addresses are blocked.");
   }
 };
 
@@ -113,11 +75,13 @@ const inspectHeaders = (url: URL, headers: Headers) => {
 
 const robotsDisallows = async (origin: URL) => {
   try {
-    const response = await fetchPublicPage(new URL("/robots.txt", origin), "text/plain", 8_000, 512_000);
+    await assertPublicHost(origin.hostname);
+    const response = await fetch(new URL("/robots.txt", origin), { redirect: "manual", signal: AbortSignal.timeout(8_000), headers: { "User-Agent": "AegisTriage-PassiveCrawler/1.0" } });
     if (!response.ok) return [];
+    const text = await response.text();
     let applies = false;
     const disallowed: string[] = [];
-    for (const rawLine of response.text.split(/\r?\n/)) {
+    for (const rawLine of text.split(/\r?\n/)) {
       const line = rawLine.split("#")[0].trim();
       const [rawKey, ...rest] = line.split(":");
       const key = rawKey?.trim().toLowerCase();
@@ -135,7 +99,7 @@ export const crawlSite = async (rawUrl?: string, maxPages = 60, maxDepth = 3) =>
   if (!rawUrl?.trim()) return null;
   const root = new URL(rawUrl);
   if (!["http:", "https:"].includes(root.protocol) || root.username || root.password) throw new Error("Passive crawling supports only credential-free HTTP(S) URLs.");
-  await resolvePublicAddress(root.hostname);
+  await assertPublicHost(root.hostname);
 
   const limit = Math.min(Math.max(maxPages, 1), 200);
   const depthLimit = Math.min(Math.max(maxDepth, 0), 5);
@@ -161,10 +125,11 @@ export const crawlSite = async (rawUrl?: string, maxPages = 60, maxDepth = 3) =>
     }
     visited.add(pageUrl.toString());
     try {
-      const response = await fetchPublicPage(pageUrl, "text/html,application/xhtml+xml", 12_000, 1_500_000);
+      await assertPublicHost(pageUrl.hostname);
+      const response = await fetch(pageUrl, { redirect: "manual", signal: AbortSignal.timeout(12_000), headers: { "User-Agent": "AegisTriage-PassiveCrawler/1.0", Accept: "text/html,application/xhtml+xml" } });
       const location = response.headers.get("location");
       if (response.status >= 300 && response.status < 400 && location) {
-        const redirect = normalizePageUrl(location, pageUrl);
+        const redirect = normalizePageUrl(location, root);
         if (redirect && current.depth <= depthLimit) queue.push({ url: redirect, depth: current.depth });
         continue;
       }
@@ -175,8 +140,11 @@ export const crawlSite = async (rawUrl?: string, maxPages = 60, maxDepth = 3) =>
         rootHeaders = Object.fromEntries(names.map((name) => [name, response.headers.get(name)]).filter((entry): entry is [string, string] => Boolean(entry[1])));
       }
       findings.push(...inspectHeaders(pageUrl, response.headers));
-      if (!contentType.toLowerCase().includes("text/html") || !response.text) continue;
-      const $ = load(response.text);
+      if (!contentType.toLowerCase().includes("text/html")) continue;
+      const declaredLength = Number(response.headers.get("content-length") ?? 0);
+      if (declaredLength > 1_500_000) continue;
+      const html = (await response.text()).slice(0, 1_500_000);
+      const $ = load(html);
       const links = new Set<string>();
       $("a[href]").each((_index, element) => {
         const normalized = normalizePageUrl($(element).attr("href") ?? "", root);
