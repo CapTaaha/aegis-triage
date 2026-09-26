@@ -1,5 +1,7 @@
 # Aegis Triage
 
+🚧 **Active Development**
+
 Aegis Triage is an interactive code-analysis and triage dashboard built with TypeScript and React. It helps you explore call graphs, inspect functions, manage targets, and run lightweight triage workflows from a feature-rich web UI.
 
 > UI-first tool for codebase triage, visual analysis, and lightweight automation.
@@ -114,19 +116,6 @@ AI_RULES.md
 
 ---
 
-## License
-
-No LICENSE file was detected in the repository root at the time this README was written. Add a LICENSE file (for example, MIT) if you want to make this project open-source.
-
----
-
 ## Contact
 
 Maintainer: @CapTaaha — raise issues or PRs on GitHub.
-
----
-
-If you'd like, I can:
-- add a screenshot and a short "how it looks" section (I can draft the image alt text and placement),
-- move the UI primitives into a workspace package and update import paths, or
-- add a LICENSE file and a contributing checklist template.
